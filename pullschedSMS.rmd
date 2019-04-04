@@ -114,7 +114,7 @@ if (nrow(resp)==0) {
   sched_response<-as.data.frame(cbind(event_id, status, phone,msg_id, processed))
   sent_sms<-rbind(sent_sms,sched_response)
 }
-
+sent_sms$phone<-as.integer(sent_sms$phone)
 
 ```
 
