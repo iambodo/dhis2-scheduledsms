@@ -162,23 +162,29 @@ colnames(prefix_summary)<-c("prefix","status","count")
 prefix_summary
 
 #calendar view of SMS messages sent
+require(openair)
+redcols<-openColours(c("pink","coral","firebrick"), 15)
+greencols<-openColours(c("lightgreen","green","forestgreen"), 15)
+
 date_summary<-sent_sms %>%
   group_by(date, status) %>%
   summarize(n())
 colnames(date_summary)<-c("date","status","number")
 date_summary$date<-as.POSIXct(date_summary$date)
 
+
 summ_sent<- date_summary %>% filter(status=="SENT")
 summ_failed<-date_summary %>% filter(status=="FAILED")
 
-summary(summ_sent)
-summary(summ_failed)
 
-require(openair)
-redcols<-openColours(c("pink","coral","firebrick"), 15)
-greencols<-openColours(c("lightgreen","green","forestgreen"), 15)
-openair::calendarPlot(summ_sent, pollutant="number", xlab="Dates SMS were sent", cols=greencols) 
-openair::calendarPlot(summ_failed, pollutant="number", xlab="Dates SMS failed", cols=redcols)
+if (length(summ_sent$number)>0){
+  summary(summ_sent)
+  openair::calendarPlot(summ_sent, pollutant="number", xlab="Dates SMS were sent", cols=greencols) 
+}
+if (length(summ_failed$number)>0){
+  summary(summ_failed)
+  openair::calendarPlot(summ_failed, pollutant="number", xlab="Dates SMS failed", cols=redcols)
+}
 
 ##sent/failed by date (ugly line plot)
 require(ggplot2)
