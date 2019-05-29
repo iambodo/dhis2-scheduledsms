@@ -7,8 +7,8 @@ output: html_document
 knitr::opts_chunk$set(echo=FALSE, message=TRUE, warning=FALSE, paged.print=FALSE, fig.width = 7)
 options(encoding = "UTF-8")
 
-install.packages("packrat")
-packrat::restore()
+##Run this command in console before executing "Knit" command: install.packages("packrat")
+packrat::snapshot()
 
 ##ENTER BASE URL, USERNAME, PASSWORD
 baseurl<-"https://hrhr.dhis2.org/dhis/"
@@ -114,7 +114,7 @@ if (nrow(resp)==0) {
   sched_response<-as.data.frame(cbind(event_id, status, phone,msg_id, processed))
   sent_sms<-rbind(sent_sms,sched_response)
 }
-sent_sms$phone<-as.integer(sent_sms$phone)
+sent_sms$phone<-as.character(sent_sms$phone)
 
 ```
 
