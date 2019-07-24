@@ -7,15 +7,31 @@ output: html_document
 knitr::opts_chunk$set(echo=FALSE, message=TRUE, warning=FALSE, paged.print=FALSE, fig.width = 7)
 options(encoding = "UTF-8")
 
-##Run this command in console before executing "Knit" command: install.packages("packrat")
-packrat::snapshot()
-
+##Important!! Enter credential information. Include last "/" of the baseurl
 ##ENTER BASE URL, USERNAME, PASSWORD
 baseurl<-"https://hrhr.dhis2.org/dhis/"
 username<-""
 password<-""
 
 
+##Load required packages
+packages<-c("openair","ggplot2","dplyr","stringr","lubridate","httr","assertthat","readr","stats","graphics", "grdevices","utils","datasets","methods","base","knitr")      
+
+install_or_load_pack <- function(pack){
+  create.pkg <- pack[!(pack %in% installed.packages()[, "Package"])]
+  if (length(create.pkg))
+    install.packages(create.pkg, dependencies = TRUE)
+  sapply(pack, require, character.only = TRUE)
+}
+
+####IMPORTANT!!! before executing "Knit" command, ***Uncomment this funtion***, then run this chunk in console :
+
+#install_or_load_pack(packages)
+
+####THEN, comment out or delete above command
+
+  
+  
 ##download libraries and test login
 require(readr)
 require(assertthat)
@@ -35,7 +51,7 @@ if(loginDHIS2(baseurl,username,password)){
 
 ## Pulling Scheduled Events and Scheduled SMS
 
-```{r schedule, echo=FALSE, warning=FALSE}
+```{r schedule, echo=FALSE, warning=FALSE, include=FALSE}
 options(encoding = "UTF-8")
 ##pull program IDs
 require(httr)
