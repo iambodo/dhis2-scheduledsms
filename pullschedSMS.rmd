@@ -10,7 +10,7 @@ options(encoding = "UTF-8")
 ##ENTER BASE URL, USERNAME, PASSWORD
 baseurl<-"https://hrhr.dhis2.org/dhis/"
 username<-"brian"
-password<-"eReg!234"
+password<-""
 
 
 ##Load required packages
