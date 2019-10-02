@@ -3,28 +3,32 @@ title: "DHIS2 Scheduled SMS"
 output: html_document
 ---
 
-```{r setup, include=FALSE, echo = TRUE}
+```{r setup, include=FALSE, echo = FALSE}
 knitr::opts_chunk$set(echo=FALSE, message=TRUE, warning=FALSE, paged.print=FALSE, fig.width = 7)
 options(encoding = "UTF-8")
+Sys.setlocale(category = "LC_ALL", locale = "Arabic")
+
+
 ##Important!! Enter credential information. Include last "/" of the baseurl
 ##ENTER BASE URL, USERNAME, PASSWORD
 baseurl<-"https://hrhr.dhis2.org/dhis/"
-username<-"brian"
-password<-""
+username<-"admin"
+password<-"District9"
 
 
 ##Load required packages
-packages<-c("openair","ggplot2","dplyr","stringr","lubridate","httr","assertthat","readr","stats","graphics", "grdevices","utils","datasets","DT","methods","base","knitr")      
-install_or_load_pack <- function(pack){
-  create.pkg <- pack[!(pack %in% installed.packages()[, "packages"])]
-  if (length(create.pkg))
-    install.packages(create.pkg, dependencies = TRUE)
-  sapply(pack, require, character.only = TRUE)
+required_packages<-c("openair","ggplot2","dplyr","stringr","lubridate","httr","assertthat","readr","stats","graphics","datasets","DT","methods","base","knitr")   
+
+is_installed <- function(mypkg) is.element(mypkg, installed.packages()[,1])
+load_or_install<-function(required_packages) {
+  for(package_name in required_packages)  {
+    if(!is_installed(package_name))     {
+      install.packages(package_name,repos="http://lib.stat.cmu.edu/R/CRAN")  }
+    library(package_name,character.only=TRUE,quietly=TRUE,verbose=FALSE)
+  }
 }
-####IMPORTANT!!! before executing "Knit" command, ***Uncomment this funtion***, then run this chunk in console :
-#install_or_load_pack(packages)
-####THEN, comment out or delete above command
-  
+load_or_install(required_packages)
+
   
 ##download libraries and test login
 require(readr)
@@ -40,14 +44,11 @@ if(loginDHIS2(baseurl,username,password)){
   stop("could not log in! Please check url, username and password")
 }
 
-
 ```
 
 ## Pulling Scheduled Events and Scheduled SMS
 
 ```{r schedule, echo=FALSE, warning=FALSE, include=FALSE}
-options(encoding = "UTF-8")
-Sys.setlocale(category = "LC_ALL", locale = "Arabic")
 
 ##pull program IDs
 require(httr)
@@ -82,6 +83,7 @@ sched_sms<-(subset(sched_sms, select=c("name", "created","scheduledAt","id","las
                                        "lastUpdatedBy.id","programStageInstance.created","programStageInstance.id")))
 colnames(sched_sms)<-c("msg_name", "msg_generated","msg_scheduledFor","msg_id","creater_name","creater_userid", "event_createdat","event_id")
 ```
+
 
 ## Loop Through scheduled events at SMS/sent endpoint
 ```{r sent-failed SMS, echo=FALSE}
@@ -118,18 +120,76 @@ if (nrow(resp)==0) {
   sched_response<-as.data.frame(cbind(event_id, status, phone, msg_id, msg_text, processed))
   sent_sms<-rbind(sent_sms,sched_response)
 }
+#convert to character
 sent_sms$phone<-as.character(sent_sms$phone)
 
 ```
 
+```{r get org units, echo=FALSE}
+library(jsonlite)
+library(dplyr)
+url<-paste0(baseurl,"api/29/organisationUnits.json?paging=false&fields=name,id")
+resp<-fromJSON(content(GET(url), "text"))
+all_OUs<-resp$organisationUnits
+
+#join with sched_events
+sched_events<- sched_events %>% 
+  left_join(all_OUs, by = c("orgUnit" = "id"))
+
+```
+
+
+```{r anonymize phone numbers, echo = FALSE, eval = TRUE}
+#copy to output table, retain original for CSV
+sent_sms_table<-sent_sms
+
+#replace digits with xxxx, keep last 4
+library(stringr)
+str_sub(sent_sms_table$phone, start = 1, end = nchar(sent_sms_table$phone)-4) <- "XXXX"
+
+```
+
+```{r summarize outputs}
+
+sched_events_table<-sched_events %>%
+  group_by(name, orgUnit) %>%
+  summarize("ScheduledEvents"=n()) %>%
+  arrange(desc(ScheduledEvents))
+
+sched_sms_table<-sched_sms %>%
+  group_by(msg_name) %>% 
+  summarize("ScheduledSMS"=n()) %>%
+  arrange(desc(ScheduledSMS))
+
+```
 ##Summary of Data from script
 CSV files can be found at `r getwd()`
 
-```{r summaries, echo=FALSE}
+```{r summaries, echo=FALSE, include=TRUE}
 summary(sent_sms$status)
-DT::datatable(sent_sms, escape = FALSE)
-sort(summary(as.factor(sched_sms$msg_name)), decreasing = TRUE)
-sort(summary(as.factor(sched_events$orgUnit)))
+DT::datatable(sent_sms_table, 
+              caption = "All SMS sent (blocked #s)",
+              extensions = 'Buttons', 
+              options = list(
+                pageLength = 10,
+                dom = 'Blfrtip', 
+                buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+
+DT::datatable(sched_events_table, 
+              caption = "All Scheduled Events, by OU",
+              extensions = 'Buttons', 
+              options = list(
+                pageLength = 5,
+                dom = 'Blfrtip', 
+                buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+
+DT::datatable(sched_sms_table, 
+              caption = "All SMS Messages Scheduled, by type",
+              extensions = 'Buttons', 
+              options = list(
+                pageLength = 5,
+                dom = 'Blfrtip', 
+                buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
 
 #summaries written at
 write.csv(sent_sms, file="dhis_sent_scheduled_sms.csv")
@@ -156,7 +216,7 @@ prefix_summary<-sent_sms %>%
   group_by(prefix, status) %>%
   summarize(n())
 colnames(prefix_summary)<-c("prefix","status","count")
-prefix_summary
+datatable(prefix_summary)
 #calendar view of SMS messages sent
 require(openair)
 
