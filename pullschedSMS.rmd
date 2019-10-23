@@ -1,6 +1,11 @@
 ---
 title: "DHIS2 Scheduled SMS"
-output: html_document
+output:
+  html_document: 
+    toc: true
+    toc_float: false
+    toc_depth: 4
+    number_sections: true
 ---
 
 ```{r setup, include=FALSE, echo = FALSE}
@@ -12,8 +17,8 @@ Sys.setlocale(category = "LC_ALL", locale = "Arabic")
 ##Important!! Enter credential information. Include last "/" of the baseurl
 ##ENTER BASE URL, USERNAME, PASSWORD
 baseurl<-"https://hrhr.dhis2.org/dhis/"
-username<-"admin"
-password<-"District9"
+username<-""
+password<-""
 
 
 ##Load required packages
@@ -46,7 +51,9 @@ if(loginDHIS2(baseurl,username,password)){
 
 ```
 
-## Pulling Scheduled Events and Scheduled SMS
+* Analysis run on `r Sys.Date()`
+
+* Pulling Scheduled Events and Scheduled SMS
 
 ```{r schedule, echo=FALSE, warning=FALSE, include=FALSE}
 
@@ -79,21 +86,20 @@ sms_api<-"api/sms/scheduled"
 url<-paste0(baseurl,sms_api)
 sched_sms<-as.data.frame(jsonlite::fromJSON(content(GET(url),"text"), flatten = TRUE))
 sched_sms<- sched_sms[!is.na(sched_sms$programStageInstance.id),]
-sched_sms<-(subset(sched_sms, select=c("name", "created","scheduledAt","id","lastUpdatedBy.name",
-                                       "lastUpdatedBy.id","programStageInstance.created","programStageInstance.id")))
+sched_sms<-(subset(sched_sms, select=c("name", "created","scheduledAt","id","lastUpdatedBy.name", "lastUpdatedBy.id","programStageInstance.created","programStageInstance.id")))
 colnames(sched_sms)<-c("msg_name", "msg_generated","msg_scheduledFor","msg_id","creater_name","creater_userid", "event_createdat","event_id")
 ```
 
 
-## Loop Through scheduled events at SMS/sent endpoint
+* Loop Through scheduled events at SMS/sent endpoint
 ```{r sent-failed SMS, echo=FALSE}
 #create empty dataframe to capture all sent msgs
-event_id<-character()
-status<-factor()
-phone<-integer()
-msg_id<-character()
-processed<-character()
-sent_sms<-cbind(event_id, status, phone,msg_id, processed)
+sent_sms<-data.frame(event_id =character(), 
+                     status =factor(),
+                     phone = integer(),
+                     msg_id = character(), 
+                     processed = character())
+
 #loop through scheduled SMS by event_id at: SENT API endpoint
 #skip over events that return an error response (deleted event after scheduled msg), or those that return a null array (no sent messages)
 require(httr)
@@ -123,6 +129,9 @@ if (nrow(resp)==0) {
 #convert to character
 sent_sms$phone<-as.character(sent_sms$phone)
 
+
+
+
 ```
 
 ```{r get org units, echo=FALSE}
@@ -136,12 +145,19 @@ all_OUs<-resp$organisationUnits
 sched_events<- sched_events %>% 
   left_join(all_OUs, by = c("orgUnit" = "id"))
 
+
 ```
 
 
 ```{r anonymize phone numbers, echo = FALSE, eval = TRUE}
+
+#join with scheduled events to get the due date on the message
+sent_sms <- sent_sms %>%
+  left_join(select(sched_events, dueDate, event), by = c("event_id" = "event"))
+
 #copy to output table, retain original for CSV
 sent_sms_table<-sent_sms
+
 
 #replace digits with xxxx, keep last 4
 library(stringr)
@@ -161,43 +177,49 @@ sched_sms_table<-sched_sms %>%
   summarize("ScheduledSMS"=n()) %>%
   arrange(desc(ScheduledSMS))
 
+makeDT<-function(x, caption, pagelength){
+DT::datatable(x, 
+              caption = caption,
+              extensions = 'Buttons', 
+              options = list(
+                pageLength = pagelength,
+                dom = 'Blfrtip', 
+                buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+  
+}
 ```
 ##Summary of Data from script
 CSV files can be found at `r getwd()`
 
 ```{r summaries, echo=FALSE, include=TRUE}
 summary(sent_sms$status)
-DT::datatable(sent_sms_table, 
-              caption = "All SMS sent (blocked #s)",
-              extensions = 'Buttons', 
-              options = list(
-                pageLength = 10,
-                dom = 'Blfrtip', 
-                buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
 
-DT::datatable(sched_events_table, 
-              caption = "All Scheduled Events, by OU",
-              extensions = 'Buttons', 
-              options = list(
-                pageLength = 5,
-                dom = 'Blfrtip', 
-                buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
-
-DT::datatable(sched_sms_table, 
-              caption = "All SMS Messages Scheduled, by type",
-              extensions = 'Buttons', 
-              options = list(
-                pageLength = 5,
-                dom = 'Blfrtip', 
-                buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
-
-#summaries written at
 write.csv(sent_sms, file="dhis_sent_scheduled_sms.csv")
 write.csv(sched_sms, file="dhis_all_scheduled_sms.csv")
 write.csv(sched_events, file="dhis_all_scheduled_events.csv")
+
 ```
 
-##Graphs and Figures
+#Sent SMS Table
+```{r summaries 1}
+makeDT(sent_sms_table, "All SMS sent (blocked #s)", 10)
+```
+
+#Scheduled Events by OU
+```{r summaries 2}
+makeDT(sched_events_table, "All Scheduled Events, by OU", 5)
+```
+
+
+#All SMS Scheduled, by Type
+```{r summaries 3}
+makeDT(sent_sms_table, "Scheduled templates", 5)
+
+```
+
+
+
+#Graphs and Figures
 
 ```{r Figures, echo=FALSE, fig.height=3, message=FALSE, warning=FALSE}
 ###Analysis####
