@@ -1,0 +1,402 @@
+---
+title: "DHIS2 Scheduled SMS"
+output:
+  html_document: 
+    toc: true
+    toc_float: false
+    toc_depth: 4
+    number_sections: true
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=TRUE, warning=FALSE, paged.print=FALSE, fig.width = 7)
+options(encoding = "UTF-8")
+Sys.setlocale(category = "LC_ALL", "Arabic")
+
+
+##Important!! Enter credential information. Include last "/" of the baseurl
+##ENTER BASE URL, USERNAME, PASSWORD
+baseurl<-"https://hrhr.dhis2.org/dhis/"
+username<-""
+password<-""
+
+
+##Load required packages
+required_packages<-c("openair","ggplot2","dplyr","stringr","lubridate","httr","assertthat","readr","stats","graphics","datasets","DT","methods","base","knitr")   
+
+is_installed <- function(mypkg) is.element(mypkg, installed.packages()[,1])
+load_or_install<-function(required_packages) {
+  for(package_name in required_packages)  {
+    if(!is_installed(package_name))     {
+      install.packages(package_name,repos="http://lib.stat.cmu.edu/R/CRAN")  }
+    library(package_name,character.only=TRUE,quietly=TRUE,verbose=FALSE)
+  }
+}
+load_or_install(required_packages)
+
+  
+##download libraries and test login
+require(readr)
+require(assertthat)
+require(httr)
+loginDHIS2<-function(baseurl,username,password) {
+  url<-paste0(baseurl,"api/me")
+  r<-GET(url,authenticate(username,password))
+  assert_that(r$status_code == 200L) }
+if(loginDHIS2(baseurl,username,password)){
+  print("successfully logged in")
+}else{
+  stop("could not log in! Please check url, username and password")
+}
+
+```
+
+* Analysis run on `r Sys.Date()`
+
+* Pulling Scheduled Events and Scheduled SMS for `r baseurl`
+
+```{r schedule, echo=FALSE, warning=FALSE, include=FALSE}
+
+##pull program IDs
+require(httr)
+program_api<-"api/programs.csv?fields=id"
+url<-paste0(baseurl,program_api)
+program<-as.data.frame(read_csv(content(GET(url), as = "text")))
+#for each program ID, pull scheduled events and add to a dataframe
+#first, create an empty dataframe
+sched_events<-data.frame()
+#e<-c("programStage","orgUnit","program","event","status","created")
+#for (k in e) sched_events[[k]]<-as.character()
+
+#now loop over programs to get events
+for (value in 1:length(program$id)){
+events_api<-paste0("api/events.json?fields=program,orgUnit,event,",
+                    "programStage,created,status,enrollment,trackedEntityInstance,dueDate&",
+                    "ouMode=ACCESSIBLE&paging=false&program=")
+url<-paste0(baseurl,events_api,program$id[value])
+event1<-jsonlite::fromJSON(content(GET(url),"text"))
+event1<-as.data.frame(event1$events)
+if (length(event1$event)>0){
+  sched_events<-rbind(sched_events,event1)
+}
+next()
+}
+
+
+#debug checks
+#head(sched_events)
+#length(unique(sched_events$event))
+#now pull all scheduled SMS messages, and remove those that are based on program enrollment
+sms_api<-"api/sms/scheduled"
+url<-paste0(baseurl,sms_api)
+sched_sms<-as.data.frame(jsonlite::fromJSON(content(GET(url),"text"), flatten = TRUE))
+sched_sms<- sched_sms[!is.na(sched_sms$programStageInstance.id),]
+sched_sms<-(subset(sched_sms, select=c("name", "created","scheduledAt","id","lastUpdatedBy.name", "lastUpdatedBy.id","programStageInstance.created","programStageInstance.id")))
+colnames(sched_sms)<-c("msg_name", "msg_generated","msg_scheduledFor","msg_id","creater_name","creater_userid", "event_createdat","event_id")
+
+
+
+```
+
+* Looping through scheduled events at SMS/sent endpoint
+```{r sent-failed SMS, echo=FALSE}
+#create empty dataframe to capture all sent msgs
+sent_sms<-data.frame(event_id =character(),
+                     status =factor(),
+                     phone = integer(),
+                     msg_id = character(), 
+                     processed = character())
+
+#loop through scheduled SMS by event_id at: SENT API endpoint
+#skip over events that return an error response (deleted event after scheduled msg), or those that return a null array (no sent messages)
+
+require(httr)
+unique_events<-unique(sched_sms$event_id)
+for (i in 1:length(unique_events)){
+psi<-unique_events[i]
+sms_test<-"api/sms/scheduled/sent?programStageInstance="
+url<-paste0(baseurl,sms_test,psi)
+resp<-as.data.frame(suppressMessages(jsonlite::fromJSON(content(GET(url),"text"), flatten = TRUE)))
+
+if (ncol(resp)==4){
+  next()
+}
+if (nrow(resp)==0) {
+  next()
+}
+
+  event_id<-as.character(psi)
+  status<-as.character(resp$messageStatus)
+  phone<-as.character(resp$recipients.phoneNumbers)
+  msg_id<-as.character(resp$id)
+  msg_text<-as.character(resp$text)
+  processed<-as.character(resp$processedDate)
+  if(is.null(resp$recipients.phoneNumbers)){
+    phone<-"null"}
+  sched_response<-as.data.frame(cbind(event_id, status, phone, msg_id, msg_text, processed))
+  sent_sms<-rbind(sent_sms,sched_response)
+}
+#convert to character
+sent_sms$phone<-as.character(sent_sms$phone)
+
+
+```
+
+```{r get org units, echo=FALSE}
+library(jsonlite)
+library(dplyr)
+url<-paste0(baseurl,"api/29/organisationUnits.json?paging=false&fields=name,id")
+resp<-fromJSON(content(GET(url), "text"))
+all_OUs<-resp$organisationUnits
+
+#join with sched_events
+sched_events<- sched_events %>% 
+  left_join(all_OUs, by = c("orgUnit" = "id"))
+
+
+
+```
+
+
+
+
+```{r anonymize phone numbers, echo = FALSE, eval = TRUE}
+
+#join sent SMS with events to get the due date on the message and TEI ID
+ sent_sms2 <- sent_sms %>%
+  mutate(event=as.character(event_id)) %>%
+  left_join(sched_events, by =  c("event" = "event"))
+
+
+#copy to output table, retain original for CSV
+sent_sms_table<-sent_sms2 %>%
+ mutate("Tracker_Event"=paste0("<a href=\"", baseurl,
+                          "/dhis-web-tracker-capture/index.html#/dashboard?",
+                          "tei=",trackedEntityInstance,
+                          "&program=WSGAb5XwJ3Y&ou=",orgUnit,
+                          "\">",event_id,"</a>")) %>%
+select(Tracker_Event,name,msg_text,Send_Status="status.x", phone, processed, Status_Event="status.y", dueDate, created)
+
+
+
+
+distinct_receivers<-length(unique(sent_sms2$trackedEntityInstance))
+
+
+#replace digits with xxxx, keep last 4
+library(stringr)
+str_sub(sent_sms_table$phone, start = 1, end = nchar(sent_sms_table$phone)-4) <- "XXXX"
+
+
+```
+
+
+
+
+```{r summarize outputs}
+
+sched_sms_table<-sched_sms %>%
+  group_by(msg_name) %>% 
+  summarize("ScheduledSMS"=n()) %>%
+  arrange(desc(ScheduledSMS))
+
+
+sched_sms_byOU<-sched_sms %>%
+  left_join(sched_events, by=c("event_id" = "event")) %>%
+  group_by(name, msg_name) %>% 
+  summarize("ScheduledSMS"=n()) %>%
+  arrange(desc(ScheduledSMS))
+
+library(lubridate)
+dupl_sms_by_OU <-sent_sms2 %>%
+  mutate(date_attempt = lubridate::date(processed)) %>%
+  group_by(name, event, date_attempt, msg_text) %>%
+  filter(n()>1) %>%
+  summarize(Duplicates=n())
+
+
+sched_events_table<-sched_events %>%
+  filter(status=="VISITED" | status=="SCHEDULE") %>%
+  group_by(name, orgUnit) %>%
+  summarize("ScheduledEvents"=n()) %>%
+  arrange(desc(ScheduledEvents))
+
+
+
+makeDT<-function(x, caption, pagelength){
+DT::datatable(x, 
+              caption = caption,
+              escape = FALSE,
+              extensions = 'Buttons', 
+              options = list(
+                pageLength = pagelength,
+                dom = 'Blfrtip', 
+                buttons = list(I("colvis"), c('copy', 'csv', 'excel', 'pdf','print'))))
+  
+}
+
+```
+
+# Summary of Data from script
+CSV files can be found at `r getwd()`
+
+`r distinct_receivers` distinct patients received SMS. In sum, the following scheduled SMS were successfully sent and failed from the DHIS2 instance.
+
+```{r summaries, echo=FALSE, include=TRUE}
+summary(sent_sms$status)
+
+write.csv(sent_sms, file="dhis_sent_scheduled_sms.csv")
+write.csv(sched_sms_table, file="dhis_all_scheduled_sms.csv")
+write.csv(sched_events, file="dhis_all_scheduled_events.csv")
+
+```
+
+
+## Sent SMS Table
+```{r summaries 1}
+
+makeDT(sent_sms_table, "All SMS sent (blocked #s)", 5)
+
+```
+## Summary by Phone Number Prefix
+
+Check here in case some providers (denoted by phone prefix) are failing to send SMS.
+
+```{r Prefix, echo=FALSE, fig.height=3, message=FALSE, warning=FALSE}
+
+library(dplyr)
+sent_sms$prefix<-stringr::str_sub(sent_sms$phone,1,3)
+prefix_summary<-sent_sms %>%
+  group_by(prefix, status) %>%
+  summarize("count"=n()) %>%
+  arrange(desc(count))
+
+makeDT(prefix_summary, "Summary by Prefix", 5)
+
+```
+
+## Check for Duplicate Messages
+
+For troubleshooting a known bug. 
+These messages were sent to the same org unit, same event, same message, and sent on same date. 
+
+```{r Duplicates}
+
+makeDT(dupl_sms_by_OU, "Summary by Prefix", 5)
+
+```
+
+
+## All Scheduled Events, by Org Unit
+
+The following table shows all `r sum(sched_events_table$ScheduledEvents)` Scheduled and Visited *EVENTS*
+
+
+```{r summaries 2}
+
+#Scheduled Events by OU
+makeDT(sched_events_table, "All Scheduled and Visited Events, by OU", 5)
+
+```
+
+
+## All SMS Scheduled, by Type
+The next tables show all `r sum(sched_sms_table$ScheduledSMS)` messages *SCHEDULED*
+
+```{r summaries 3}
+
+makeDT(sched_sms_table, "Scheduled templates", 5)
+```
+
+
+## All SMS Scheduled, by Type and By Org Unit
+```{r summaries 4}
+
+makeDT(sched_sms_byOU, "Scheduled templates by org unit", 5)
+
+```
+
+
+
+
+# Graphs and Figures
+
+```{r graphs1, echo = FALSE, fig.height= 6, message=FALSE, warning=FALSE}
+ggplot(sched_sms_table, aes(x= reorder(msg_name, ScheduledSMS), y=ScheduledSMS))+
+  ggtitle("Scheduled SMS by type") +
+  geom_bar(stat="identity", width=0.8, fill="steelblue")+
+  coord_flip() +
+  theme_minimal() +
+    theme(
+    legend.title=element_blank(),  
+    axis.title.y=element_blank())
+```
+
+```{r change language, echo= FALSE, message=FALSE, results= 'hide'}
+Sys.setlocale(category = "LC_ALL", "English")
+
+```
+
+
+```{r figures2, echo = FALSE, fig.height=4, fig.width=11, message=FALSE, warning=FALSE}
+#calendar view of SMS messages sent
+require(openair)
+require(lubridate)
+require(stringr)
+require(dplyr)
+require(ggplot2)
+
+sent_sms$day<-lubridate::mday(sent_sms$processed)
+sent_sms$month<-as.factor(lubridate::month(sent_sms$processed))
+sent_sms$year<-as.factor(lubridate::year(sent_sms$processed))
+sent_sms$date<-lubridate::date(sent_sms$processed)
+
+redcols<-openair::openColours(c("pink","coral","firebrick"), 15)
+greencols<-openair::openColours(c("lightgreen","green","forestgreen"), 15)
+date_summary<-sent_sms %>%
+  group_by(date, status) %>%
+  summarize(n())
+colnames(date_summary)<-c("date","status","number")
+
+summ_sent<- date_summary %>% filter(status=="SENT")
+summ_failed<-date_summary %>% filter(status=="FAILED")
+if (length(summ_sent$number)>0){
+summary(summ_sent)
+openair::calendarPlot(summ_sent, pollutant="number", xlab="Dates SMS were sent", cols=greencols) 
+}
+
+
+if (length(summ_failed$number)>0){
+  summary(summ_failed)
+  openair::calendarPlot(summ_failed, pollutant = "number", xlab="Dates SMS failed", cols=redcols)
+}
+
+##sent/failed by date (ugly line plot)
+require(ggplot2)
+ggplot(date_summary, aes(x=date, y=number, group=status))+
+  geom_line(aes(color=status)) +
+  geom_point(aes(color=status)) +
+  labs(title="SMS send attempts by date")
+##sent/failed by month (cleaner barplot)
+ggplot(sent_sms, aes(month,fill=status)) +
+         geom_bar(stat="count") +
+         facet_wrap(~year) +
+        labs(title="SMS send attempts by year and month")
+
+#plot by messages schedled (includes forthcoming)
+sched_sms$week<-lubridate::isoweek(sched_sms$msg_scheduledFor)
+sched_sms$year<-lubridate::year(sched_sms$msg_scheduledFor)
+sched_sms$yearweek<-paste0(sched_sms$year,"-",sched_sms$week)
+#Set line for today's week
+wtoday<-lubridate::week(Sys.Date())
+year<-lubridate::year(Sys.Date())
+today<-as.data.frame(cbind(wtoday,year))
+ggplot(sched_sms, aes(week)) +
+  geom_bar(stat="count") +
+  facet_wrap(~year) +
+  geom_vline(data=today, aes(xintercept=wtoday)) +
+  geom_text(data=today, mapping=aes(x=wtoday, y=0, label="Current Week"), size=4, angle=90, vjust=-.4, hjust=-.4) +
+  labs(y = "Total SMS scheduled", title ="Scheduled SMS by Year and Week")
+```
+
+End analysis
