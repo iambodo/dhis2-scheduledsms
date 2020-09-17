@@ -6,12 +6,16 @@ output:
     toc_float: false
     toc_depth: 4
     number_sections: true
+params:
+  minify_DT: true
 ---
 
 ```{r setup, include=FALSE, echo = FALSE}
 knitr::opts_chunk$set(echo=FALSE, message=TRUE, warning=FALSE, paged.print=FALSE, fig.width = 7)
 options(encoding = "UTF-8")
+
 Sys.setlocale(category = "LC_ALL", "Arabic")
+options(dplyr.summarise.inform=F) 
 
 
 ##Important!! Enter credential information. Include last "/" of the baseurl
@@ -19,6 +23,8 @@ Sys.setlocale(category = "LC_ALL", "Arabic")
 baseurl<-"https://hrhr.dhis2.org/dhis/"
 username<-""
 password<-""
+
+
 
 
 ##Load required packages
@@ -64,7 +70,7 @@ url<-paste0(baseurl,program_api)
 program<-as.data.frame(read_csv(content(GET(url), as = "text")))
 #for each program ID, pull scheduled events and add to a dataframe
 #first, create an empty dataframe
-sched_events<-data.frame()
+sched_events<-tibble()
 #e<-c("programStage","orgUnit","program","event","status","created")
 #for (k in e) sched_events[[k]]<-as.character()
 
@@ -72,7 +78,11 @@ sched_events<-data.frame()
 for (value in 1:length(program$id)){
 events_api<-paste0("api/events.json?fields=program,orgUnit,event,",
                     "programStage,created,status,enrollment,trackedEntityInstance,dueDate&",
-                    "ouMode=ACCESSIBLE&paging=false&program=")
+                    "&startDate=2017-01-01",
+                    "&includeDeleted=TRUE",
+                    "&orgUnit=GD7TowwI46c&ouMode=DESCENDANTS",
+                    "&filter=programStage:in:[WZbXY0S00lP,edqlbukwRfQ,uUHQw5KrZAL]",
+                    "&paging=false&program=")
 url<-paste0(baseurl,events_api,program$id[value])
 event1<-jsonlite::fromJSON(content(GET(url),"text"))
 event1<-as.data.frame(event1$events)
@@ -98,7 +108,9 @@ colnames(sched_sms)<-c("msg_name", "msg_generated","msg_scheduledFor","msg_id","
 
 ```
 
+
 * Looping through scheduled events at SMS/sent endpoint
+
 ```{r sent-failed SMS, echo=FALSE}
 #create empty dataframe to capture all sent msgs
 sent_sms<-data.frame(event_id =character(),
@@ -142,18 +154,20 @@ sent_sms$phone<-as.character(sent_sms$phone)
 
 ```
 
-```{r get org units, echo=FALSE}
+
+```{r get org units, echo=FALSE, warning=FALSE, message=FALSE}
 library(jsonlite)
 library(dplyr)
-url<-paste0(baseurl,"api/29/organisationUnits.json?paging=false&fields=name,id")
-resp<-fromJSON(content(GET(url), "text"))
-all_OUs<-resp$organisationUnits
+library(readr)
+
+url<-paste0(baseurl,"api/29/organisationUnits.csv?paging=false&fields=name,id")
+
+all_OUs<-readr::read_csv(content(GET(url)))
+               
 
 #join with sched_events
 sched_events<- sched_events %>% 
   left_join(all_OUs, by = c("orgUnit" = "id"))
-
-
 
 ```
 
@@ -243,7 +257,7 @@ DT::datatable(x,
               options = list(
                 pageLength = pagelength,
                 dom = 'Blfrtip', 
-                buttons = list(I("colvis"), c('copy', 'csv', 'excel', 'pdf','print'))))
+                buttons = list(I("colvis"), c('copy', 'csv', 'excel','print'))))
   
 }
 
@@ -255,10 +269,10 @@ CSV files can be found at `r getwd()`
 `r distinct_receivers` distinct patients received SMS. In sum, the following scheduled SMS were successfully sent and failed from the DHIS2 instance.
 
 ```{r summaries, echo=FALSE, include=TRUE}
-summary(sent_sms$status)
+table(sent_sms$status)
 
 write.csv(sent_sms, file="dhis_sent_scheduled_sms.csv")
-write.csv(sched_sms_table, file="dhis_all_scheduled_sms.csv")
+write.csv(sched_sms, file="dhis_all_scheduled_sms.csv")
 write.csv(sched_events, file="dhis_all_scheduled_events.csv")
 
 ```
@@ -267,6 +281,12 @@ write.csv(sched_events, file="dhis_all_scheduled_events.csv")
 ## Sent SMS Table
 ```{r summaries 1}
 
+if (params$minify_DT==TRUE){
+  sent_sms_table <- sent_sms_table %>%
+    select(-dueDate, -Tracker_Event)
+}
+
+
 makeDT(sent_sms_table, "All SMS sent (blocked #s)", 5)
 ```
 
@@ -274,7 +294,7 @@ makeDT(sent_sms_table, "All SMS sent (blocked #s)", 5)
 
 Check here in case some providers (denoted by phone prefix) are failing to send SMS.
 
-```{r Prefix, echo=FALSE, fig.height=3, message=FALSE, warning=FALSE}
+```{r Prefix, include=FALSE, echo=FALSE, fig.height=3, message=FALSE, warning=FALSE}
 
 library(dplyr)
 sent_sms$prefix<-stringr::str_sub(sent_sms$phone,1,3)
@@ -292,9 +312,9 @@ makeDT(prefix_summary, "Summary by Prefix", 5)
 For troubleshooting a known bug. 
 These messages were sent to the same org unit, same event, same message, and sent on same date. 
 
-```{r Duplicates}
+```{r Duplicates, include=FALSE}
 
-makeDT(dupl_sms_by_OU, "Summary by Prefix", 5)
+makeDT(dupl_sms_by_OU, "Duplicates", 5)
 
 ```
 
@@ -303,7 +323,7 @@ makeDT(dupl_sms_by_OU, "Summary by Prefix", 5)
 The date in the text message should match the exact date of the event's dueDate.
 In total, there were `r length(mismatches$name)` mismatches.
 
-```{r Date mismatch}
+```{r Date mismatch, include=FALSE}
 
 makeDT(date_extracted, "Extracted Message Date", 5)
 
@@ -316,7 +336,7 @@ makeDT(date_extracted, "Extracted Message Date", 5)
 The following table shows all `r sum(sched_events_table$ScheduledEvents)` Scheduled and Visited *EVENTS*
 
 
-```{r summaries 2}
+```{r summaries 2, include=TRUE}
 
 #Scheduled Events by OU
 makeDT(sched_events_table, "All Scheduled and Visited Events, by OU", 5)
@@ -373,6 +393,8 @@ sent_sms$month<-as.factor(lubridate::month(sent_sms$processed))
 sent_sms$year<-as.factor(lubridate::year(sent_sms$processed))
 sent_sms$date<-lubridate::date(sent_sms$processed)
 
+
+library(openair)
 redcols<-openair::openColours(c("pink","coral","firebrick"), 15)
 greencols<-openair::openColours(c("lightgreen","green","forestgreen"), 15)
 date_summary<-sent_sms %>%
@@ -419,6 +441,8 @@ ggplot(sched_sms, aes(week)) +
   geom_vline(data=today, aes(xintercept=wtoday)) +
   geom_text(data=today, mapping=aes(x=wtoday, y=0, label="Current Week"), size=4, angle=90, vjust=-.4, hjust=-.4) +
   labs(y = "Total SMS scheduled", title ="Scheduled SMS by Year and Week")
+
+
 ```
 
 End analysis
