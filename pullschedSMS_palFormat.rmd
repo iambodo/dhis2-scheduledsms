@@ -24,8 +24,8 @@ baseurl<-"https://hrhr.dhis2.org/dhis/"
 username<-""
 password<-""
 
-#specify ANC stage ID to extract events from (improves performance)
-stage_ids<-c("edqlbukwRfQ")
+#specify ANC stage IDS to extract events from (improves performance)
+stage_ids<-c("edqlbukwRfQ","WZbXY0S00lP")
 
 
 ##Load required packages
@@ -71,34 +71,44 @@ url<-paste0(baseurl,program_api)
 program<-as.data.frame(read_csv(content(GET(url), as = "text")))
 
 
+#create url query
+events_function<- function(baseurl, program, stage){
+    
+              paste0(baseurl,
+                   "api/events.json?fields=program,orgUnit,event,",
+                    "programStage,created,status,enrollment,trackedEntityInstance,dueDate",
+                    "&startDate=2019-01-01",
+                    "&includeDeleted=TRUE",
+                    "&orgUnit=GD7TowwI46c&ouMode=DESCENDANTS",
+                    "&paging=false",
+                    "&program=", program,
+                    "&programStage=",stage) 
+  }
+
+
+
+
+#now join with stages
+program<-data.frame(stage_id=stage_ids,
+                    program_id=rep(program$id, length(stage_ids))) %>% 
+          mutate(url=events_function(baseurl, program_id, stage_id))
+                    
+
+
 #for each program ID, pull scheduled events and add to a dataframe
 #first, create an empty dataframe
 sched_events<-tibble()
 #e<-c("programStage","orgUnit","program","event","status","created")
 #for (k in e) sched_events[[k]]<-as.character()
 
-#now loop over programs to get events
-for (value in 1:length(program$id)){
+#now loop over program +stages to get events
+for (value in 1:length(program$url)){
 
-events_api<-paste0("api/events.json?fields=program,orgUnit,event,",
-                    "programStage,created,status,enrollment,trackedEntityInstance,dueDate&",
-                    "&startDate=2019-01-01",
-                    "&includeDeleted=TRUE",
-                    "&orgUnit=GD7TowwI46c&ouMode=DESCENDANTS",
-                    "&paging=false&program=" 
-                   )
-
-#add program
-url<-paste0(baseurl,events_api,program$id[value])
-
-#add stage ID
-if(!is.na(stage_ids)){
-  url<-paste0(url, "&programStage=",stage_ids[1])
-}
-
-
+url<-program$url[value]
+  
 event1<-jsonlite::fromJSON(content(GET(url),"text"))
 event1<-as.data.frame(event1$events)
+
 if (length(event1$event)>0){
   sched_events<-rbind(sched_events,event1)
 }
@@ -116,8 +126,6 @@ sched_sms<-as.data.frame(jsonlite::fromJSON(content(GET(url),"text"), flatten = 
 sched_sms<- sched_sms[!is.na(sched_sms$programStageInstance.id),]
 sched_sms<-(subset(sched_sms, select=c("name", "created","scheduledAt","id","lastUpdatedBy.name", "lastUpdatedBy.id","programStageInstance.created","programStageInstance.id")))
 colnames(sched_sms)<-c("msg_name", "msg_generated","msg_scheduledFor","msg_id","creater_name","creater_userid", "event_createdat","event_id")
-
-
 
 ```
 
@@ -255,7 +263,7 @@ dupl_sms_by_OU <-sent_sms2 %>%
 
 
 sched_events_table<-sched_events %>%
-  filter(status=="VISITED" | status=="SCHEDULE") %>%
+  filter(status=="VISITED" | status=="SCHEDULE" | status=="COMPLETED") %>%
   group_by(name, orgUnit) %>%
   summarize("ScheduledEvents"=n()) %>%
   arrange(desc(ScheduledEvents))
