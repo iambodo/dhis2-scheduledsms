@@ -24,7 +24,8 @@ baseurl<-"https://hrhr.dhis2.org/dhis/"
 username<-""
 password<-""
 
-
+#specify ANC stage ID to extract events from (improves performance)
+stage_ids<-c("edqlbukwRfQ")
 
 
 ##Load required packages
@@ -68,6 +69,8 @@ require(httr)
 program_api<-"api/programs.csv?fields=id"
 url<-paste0(baseurl,program_api)
 program<-as.data.frame(read_csv(content(GET(url), as = "text")))
+
+
 #for each program ID, pull scheduled events and add to a dataframe
 #first, create an empty dataframe
 sched_events<-tibble()
@@ -76,14 +79,24 @@ sched_events<-tibble()
 
 #now loop over programs to get events
 for (value in 1:length(program$id)){
+
 events_api<-paste0("api/events.json?fields=program,orgUnit,event,",
                     "programStage,created,status,enrollment,trackedEntityInstance,dueDate&",
-                    "&startDate=2017-01-01",
+                    "&startDate=2019-01-01",
                     "&includeDeleted=TRUE",
                     "&orgUnit=GD7TowwI46c&ouMode=DESCENDANTS",
-                    "&filter=programStage:in:[WZbXY0S00lP,edqlbukwRfQ,uUHQw5KrZAL]",
-                    "&paging=false&program=")
+                    "&paging=false&program=" 
+                   )
+
+#add program
 url<-paste0(baseurl,events_api,program$id[value])
+
+#add stage ID
+if(!is.na(stage_ids)){
+  url<-paste0(url, "&programStage=",stage_ids[1])
+}
+
+
 event1<-jsonlite::fromJSON(content(GET(url),"text"))
 event1<-as.data.frame(event1$events)
 if (length(event1$event)>0){
@@ -283,7 +296,10 @@ write.csv(sched_events, file="dhis_all_scheduled_events.csv")
 
 if (params$minify_DT==TRUE){
   sent_sms_table <- sent_sms_table %>%
-    select(-dueDate, -Tracker_Event)
+    select(-dueDate, -Tracker_Event) %>% 
+    mutate(msg_text=paste0("...",
+                           str_sub(msg_text, start=10, end=80),
+                           "..."))
 }
 
 
